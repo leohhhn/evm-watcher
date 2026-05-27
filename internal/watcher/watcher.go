@@ -4,10 +4,21 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+)
+
+var (
+	usdcAddress  = common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+	transferSig  = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
+
+	// USDC has 6 decimals.
+	usdcDecimals = big.NewFloat(1e6)
 )
 
 type Watcher struct {
@@ -36,13 +47,23 @@ func (w *Watcher) Close() {
 
 func (w *Watcher) Start(ctx context.Context) error {
 	logs := make(chan types.Log)
-	sub, err := w.client.SubscribeFilterLogs(ctx, ethereum.FilterQuery{}, logs)
+	header, err := w.client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("get latest block: %w", err)
+	}
+
+	query := ethereum.FilterQuery{
+		FromBlock: header.Number,
+		Addresses: []common.Address{usdcAddress},
+		Topics:    [][]common.Hash{{transferSig}},
+	}
+	sub, err := w.client.SubscribeFilterLogs(ctx, query, logs)
 	if err != nil {
 		return fmt.Errorf("subscribe: %w", err)
 	}
 	defer sub.Unsubscribe()
 
-	log.Println("subscribed to all logs")
+	log.Printf("subscribed to USDC Transfer events (%s)", usdcAddress.Hex())
 
 	for {
 		select {
@@ -57,9 +78,15 @@ func (w *Watcher) Start(ctx context.Context) error {
 }
 
 func printLog(l types.Log) {
-	fmt.Printf("block=%-9d tx=%s  addr=%s  topics=%d  data=%dB\n",
-		l.BlockNumber, l.TxHash.Hex(), l.Address.Hex(), len(l.Topics), len(l.Data))
-	for i, topic := range l.Topics {
-		fmt.Printf("  topic[%d] %s\n", i, topic.Hex())
+	if len(l.Topics) < 3 {
+		return
 	}
+	from := common.HexToAddress(l.Topics[1].Hex())
+	to := common.HexToAddress(l.Topics[2].Hex())
+
+	raw := new(big.Int).SetBytes(l.Data)
+	amount := new(big.Float).Quo(new(big.Float).SetInt(raw), usdcDecimals)
+
+	fmt.Printf("block=%-9d  tx=%s\n  from=%s\n  to  =%s\n  amount=%.2f USDC\n",
+		l.BlockNumber, l.TxHash.Hex(), from.Hex(), to.Hex(), amount)
 }

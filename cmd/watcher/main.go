@@ -7,10 +7,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/joho/godotenv"
 	"github.com/leohhhn/evm-watcher/internal/watcher"
 )
 
 func main() {
+	_ = godotenv.Load()
+
 	rpcURL := os.Getenv("ETH_RPC_URL")
 	if rpcURL == "" {
 		log.Fatal("ETH_RPC_URL is required (use a WebSocket URL: wss://...)")
