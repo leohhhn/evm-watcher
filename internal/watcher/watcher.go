@@ -13,6 +13,10 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
+// add per-address filter
+// add chain filter
+// add option to write out to file instead of stdout
+
 var transferSig = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
 
 type Token struct {
@@ -21,28 +25,26 @@ type Token struct {
 	Decimals *big.Float
 }
 
-// Tokens is the set of supported stablecoins.
+// decimalsToFactor converts a token's decimal count into the divisor needed to
+// convert raw uint256 amounts to human-readable values (e.g. 6 → 1_000_000).
+// Uses integer exponentiation to avoid float64 precision loss for large decimals.
+func decimalsToFactor(decimals uint8) *big.Float {
+	exp := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
+	return new(big.Float).SetInt(exp)
+}
+
+// Tokens is the set of popular tokens available as quick-select options.
 var Tokens = []Token{
-	{
-		Symbol:   "USDC",
-		Address:  common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
-		Decimals: big.NewFloat(1e6),
-	},
-	{
-		Symbol:   "USDT",
-		Address:  common.HexToAddress("0xdAC17F958D2ee523a2206206994597C13D831ec7"),
-		Decimals: big.NewFloat(1e6),
-	},
-	{
-		Symbol:   "DAI",
-		Address:  common.HexToAddress("0x6B175474E89094C44Da98b954EedeAC495271d0F"),
-		Decimals: big.NewFloat(1e18),
-	},
+	{Symbol: "USDC", Address: common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"), Decimals: decimalsToFactor(6)},
+	{Symbol: "USDT", Address: common.HexToAddress("0xdAC17F958D2ee523a2206206994597C13D831ec7"), Decimals: decimalsToFactor(6)},
+	{Symbol: "DAI", Address: common.HexToAddress("0x6B175474E89094C44Da98b954EedeAC495271d0F"), Decimals: decimalsToFactor(18)},
 }
 
 type Config struct {
-	Token     Token
-	MinAmount float64
+	Token         Token
+	MinAmount     float64
+	MaxAmount     float64
+	FilterAddress common.Address // zero value means no filter
 }
 
 type Watcher struct {
@@ -50,20 +52,41 @@ type Watcher struct {
 	cfg    Config
 }
 
-func New(ctx context.Context, rpcURL string, cfg Config) (*Watcher, error) {
+var chainNames = map[int64]string{
+	1:        "Ethereum Mainnet",
+	10:       "Optimism",
+	56:       "BNB Smart Chain",
+	137:      "Polygon",
+	8453:     "Base",
+	42161:    "Arbitrum One",
+	43114:    "Avalanche C-Chain",
+	11155111: "Sepolia",
+}
+
+func chainName(id *big.Int) string {
+	if name, ok := chainNames[id.Int64()]; ok {
+		return name
+	}
+	return fmt.Sprintf("chain %s", id)
+}
+
+// Dial connects to an Ethereum node and logs the chain name and ID.
+func Dial(ctx context.Context, rpcURL string) (*ethclient.Client, error) {
 	client, err := ethclient.DialContext(ctx, rpcURL)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
-
 	chainID, err := client.ChainID(ctx)
 	if err != nil {
 		client.Close()
 		return nil, fmt.Errorf("get chain ID: %w", err)
 	}
-	log.Printf("connected to chain ID %s", chainID)
+	log.Printf("connected to %s (chain ID %s)", chainName(chainID), chainID)
+	return client, nil
+}
 
-	return &Watcher{client: client, cfg: cfg}, nil
+func New(client *ethclient.Client, cfg Config) *Watcher {
+	return &Watcher{client: client, cfg: cfg}
 }
 
 func (w *Watcher) Close() {
@@ -81,6 +104,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 		Addresses: []common.Address{w.cfg.Token.Address},
 		Topics:    [][]common.Hash{{transferSig}},
 	}
+
 	logs := make(chan types.Log)
 	sub, err := w.client.SubscribeFilterLogs(ctx, query, logs)
 	if err != nil {
@@ -103,7 +127,14 @@ func (w *Watcher) Start(ctx context.Context) error {
 }
 
 func (w *Watcher) printLog(l types.Log) {
-	if len(l.Topics) < 3 {
+	if len(l.Topics) != 3 || l.Topics[0] != transferSig {
+		return
+	}
+
+	from := common.HexToAddress(l.Topics[1].Hex())
+	to := common.HexToAddress(l.Topics[2].Hex())
+
+	if f := w.cfg.FilterAddress; f != (common.Address{}) && from != f && to != f {
 		return
 	}
 
@@ -113,9 +144,9 @@ func (w *Watcher) printLog(l types.Log) {
 	if amount < w.cfg.MinAmount {
 		return
 	}
-
-	from := common.HexToAddress(l.Topics[1].Hex())
-	to := common.HexToAddress(l.Topics[2].Hex())
+	if w.cfg.MaxAmount > 0 && amount > w.cfg.MaxAmount {
+		return
+	}
 
 	fmt.Printf("block=%-9d  tx=%s\n  from=%s\n  to  =%s\n  amount=%.2f %s\n",
 		l.BlockNumber, l.TxHash.Hex(), from.Hex(), to.Hex(), amount, w.cfg.Token.Symbol)

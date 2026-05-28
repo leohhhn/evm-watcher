@@ -10,9 +10,13 @@ import (
 	"syscall"
 
 	"github.com/charmbracelet/huh"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/joho/godotenv"
 	"github.com/leohhhn/evm-watcher/internal/watcher"
 )
+
+const customIdx = -1
 
 func main() {
 	_ = godotenv.Load()
@@ -22,18 +26,20 @@ func main() {
 		log.Fatal("ETH_RPC_URL is required (use a WebSocket URL: wss://...)")
 	}
 
-	cfg, err := promptConfig()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	client, err := watcher.Dial(ctx, rpcURL)
+	if err != nil {
+		log.Fatalf("connect: %v", err)
+	}
+
+	cfg, err := promptConfig(ctx, client)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	w, err := watcher.New(ctx, rpcURL, cfg)
-	if err != nil {
-		log.Fatalf("init: %v", err)
-	}
+	w := watcher.New(client, cfg)
 	defer w.Close()
 
 	log.Println("watcher started — press Ctrl+C to stop")
@@ -42,14 +48,22 @@ func main() {
 	}
 }
 
-func promptConfig() (watcher.Config, error) {
-	options := make([]huh.Option[int], len(watcher.Tokens))
+func promptConfig(ctx context.Context, client *ethclient.Client) (watcher.Config, error) {
+	// Build select options: predefined tokens + custom.
+	options := make([]huh.Option[int], len(watcher.Tokens)+1)
 	for i, t := range watcher.Tokens {
 		options[i] = huh.NewOption(t.Symbol, i)
 	}
+	options[len(watcher.Tokens)] = huh.NewOption("Custom address...", customIdx)
 
-	var tokenIdx int
-	var minAmountStr string
+	var (
+		tokenIdx     int
+		customAddr   string
+		minAmountStr string
+		maxAmountStr string
+		filterByAddr bool
+		filterAddr   string
+	)
 
 	form := huh.NewForm(
 		huh.NewGroup(
@@ -57,6 +71,22 @@ func promptConfig() (watcher.Config, error) {
 				Title("Which token do you want to watch?").
 				Options(options...).
 				Value(&tokenIdx),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Contract address").
+				Placeholder("0x...").
+				Validate(func(s string) error {
+					if !common.IsHexAddress(s) {
+						return fmt.Errorf("invalid Ethereum address")
+					}
+					return nil
+				}).
+				Value(&customAddr),
+		).WithHideFunc(func() bool {
+			return tokenIdx != customIdx
+		}),
+		huh.NewGroup(
 			huh.NewInput().
 				Title("Minimum transfer amount").
 				Placeholder("1000").
@@ -68,16 +98,73 @@ func promptConfig() (watcher.Config, error) {
 					return nil
 				}).
 				Value(&minAmountStr),
+			huh.NewInput().
+				Title("Maximum transfer amount (0 = no limit)").
+				Placeholder("0").
+				Validate(func(s string) error {
+					v, err := strconv.ParseFloat(s, 64)
+					if err != nil || v < 0 {
+						return fmt.Errorf("enter a positive number or 0")
+					}
+					return nil
+				}).
+				Value(&maxAmountStr),
 		),
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Filter by a specific address?").
+				Description("Only show transfers where this address is the sender or recipient.").
+				Value(&filterByAddr),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Address to track").
+				Placeholder("0x...").
+				Validate(func(s string) error {
+					if !common.IsHexAddress(s) {
+						return fmt.Errorf("invalid Ethereum address")
+					}
+					return nil
+				}).
+				Value(&filterAddr),
+		).WithHideFunc(func() bool {
+			return !filterByAddr
+		}),
 	)
 
 	if err := form.Run(); err != nil {
 		return watcher.Config{}, err
 	}
 
-	minAmount, _ := strconv.ParseFloat(minAmountStr, 64)
-	return watcher.Config{
-		Token:     watcher.Tokens[tokenIdx],
+	var token watcher.Token
+	if tokenIdx == customIdx {
+		resolved, err := watcher.ResolveToken(ctx, client, common.HexToAddress(customAddr))
+		if err != nil {
+			return watcher.Config{}, fmt.Errorf("resolve token at %s: %w", customAddr, err)
+		}
+		token = resolved
+		log.Printf("resolved: %s (%s)", token.Symbol, token.Address.Hex())
+	} else {
+		token = watcher.Tokens[tokenIdx]
+	}
+
+	minAmount, err := strconv.ParseFloat(minAmountStr, 64)
+	if err != nil {
+		return watcher.Config{}, fmt.Errorf("invalid min amount %q: %w", minAmountStr, err)
+	}
+
+	maxAmount, err := strconv.ParseFloat(maxAmountStr, 64)
+	if err != nil {
+		return watcher.Config{}, fmt.Errorf("invalid max amount %q: %w", maxAmountStr, err)
+	}
+
+	cfg := watcher.Config{
+		Token:     token,
 		MinAmount: minAmount,
-	}, nil
+		MaxAmount: maxAmount,
+	}
+	if filterByAddr {
+		cfg.FilterAddress = common.HexToAddress(filterAddr)
+	}
+	return cfg, nil
 }
