@@ -8,7 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 const minimalERC20ABI = `[
@@ -17,7 +16,7 @@ const minimalERC20ABI = `[
 ]`
 
 // ResolveToken fetches symbol and decimals given an ERC-20 contract address on-chain.
-func ResolveToken(ctx context.Context, client *ethclient.Client, addr common.Address) (Token, error) {
+func ResolveToken(ctx context.Context, client EthClient, addr common.Address) (Token, error) {
 	parsed, err := abi.JSON(strings.NewReader(minimalERC20ABI))
 	if err != nil {
 		return Token{}, fmt.Errorf("parse abi: %w", err)
@@ -52,7 +51,7 @@ func ResolveToken(ctx context.Context, client *ethclient.Client, addr common.Add
 // Returns an error if ABI encoding fails, the RPC call is rejected (e.g. the
 // address is not a contract, or the node returned a revert), or decoding the
 // response produces no values.
-func callString(ctx context.Context, client *ethclient.Client, addr common.Address, parsed abi.ABI, method string) (string, error) {
+func callString(ctx context.Context, client EthClient, addr common.Address, parsed abi.ABI, method string) (string, error) {
 	data, err := parsed.Pack(method)
 	if err != nil {
 		return "", err
@@ -81,7 +80,7 @@ func callString(ctx context.Context, client *ethclient.Client, addr common.Addre
 //
 // The same caveats apply as callString: method must exist in parsed, its first
 // return type must be "uint8", and a type mismatch will panic at the assertion.
-func callUint8(ctx context.Context, client *ethclient.Client, addr common.Address, parsed abi.ABI, method string) (uint8, error) {
+func callUint8(ctx context.Context, client EthClient, addr common.Address, parsed abi.ABI, method string) (uint8, error) {
 	data, err := parsed.Pack(method)
 	if err != nil {
 		return 0, err

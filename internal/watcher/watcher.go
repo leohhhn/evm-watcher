@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/leohhhn/evm-watcher/internal/storage"
 )
 
 // add chain filter
@@ -45,11 +46,12 @@ type Config struct {
 	MaxAmount     float64
 	FilterAddress common.Address // zero value means no filter
 	OutputFormat  OutputFormat
-	OutputPath    string // only used when OutputFormat is not FormatStdout
+	OutputPath    string         // only used when OutputFormat is not FormatStdout
+	Store         storage.Storage // nil means no DB persistence
 }
 
 type Watcher struct {
-	client *ethclient.Client
+	client EthClient
 	cfg    Config
 	writer transferWriter
 }
@@ -73,7 +75,7 @@ func chainName(id *big.Int) string {
 }
 
 // Dial connects to an Ethereum node and logs the chain name and ID.
-func Dial(ctx context.Context, rpcURL string) (*ethclient.Client, error) {
+func Dial(ctx context.Context, rpcURL string) (EthClient, error) {
 	client, err := ethclient.DialContext(ctx, rpcURL)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
@@ -87,7 +89,7 @@ func Dial(ctx context.Context, rpcURL string) (*ethclient.Client, error) {
 	return client, nil
 }
 
-func New(client *ethclient.Client, cfg Config) (*Watcher, error) {
+func New(client EthClient, cfg Config) (*Watcher, error) {
 	writer, err := newTransferWriter(cfg.OutputFormat, cfg.OutputPath)
 	if err != nil {
 		return nil, fmt.Errorf("open output: %w", err)
@@ -161,14 +163,31 @@ func (w *Watcher) printLog(l types.Log) {
 		return
 	}
 
-	if err := w.writer.write(transferRecord{
+	rec := transferRecord{
 		Block:  l.BlockNumber,
 		TxHash: l.TxHash.Hex(),
 		From:   from.Hex(),
 		To:     to.Hex(),
 		Amount: amount,
 		Symbol: w.cfg.Token.Symbol,
-	}); err != nil {
+	}
+
+	if err := w.writer.write(rec); err != nil {
 		log.Printf("write error: %v", err)
+	}
+
+	if store := w.cfg.Store; store != nil {
+		t := storage.Transfer{
+			Block:    rec.Block,
+			TxHash:   rec.TxHash,
+			LogIndex: uint(l.Index),
+			Token:    rec.Symbol,
+			From:     rec.From,
+			To:       rec.To,
+			Amount:   rec.Amount,
+		}
+		if err := store.SaveTransfer(context.Background(), t); err != nil {
+			log.Printf("storage error: %v", err)
+		}
 	}
 }

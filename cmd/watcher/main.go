@@ -12,7 +12,6 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/joho/godotenv"
 	"github.com/leohhhn/evm-watcher/internal/watcher"
 )
@@ -79,7 +78,7 @@ func promptRPCURL() (string, error) {
 	return url, nil
 }
 
-func promptConfig(ctx context.Context, client *ethclient.Client) (watcher.Config, error) {
+func promptConfig(ctx context.Context, client watcher.EthClient) (watcher.Config, error) {
 	// customIdx is the sentinel value bound to the "Custom address..." option in
 	// the token select. -1 is intentionally out of range of watcher.Tokens indices
 	// (which are 0-based), so it can never collide with a real token index.
