@@ -1,3 +1,5 @@
+// Package watcher subscribes to ERC-20 Transfer events and routes them to
+// configurable output sinks (stdout, CSV, Markdown) and optional storage.
 package watcher
 
 import (
@@ -17,6 +19,7 @@ import (
 
 var transferSig = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
 
+// Token holds the on-chain identity and decimal precision of an ERC-20 token.
 type Token struct {
 	Symbol   string
 	Address  common.Address
@@ -44,6 +47,7 @@ func AvailableTokens() []Token {
 	return out
 }
 
+// Config holds all runtime options that control what the Watcher observes and where it writes output.
 type Config struct {
 	Token         Token
 	MinAmount     float64
@@ -54,6 +58,7 @@ type Config struct {
 	Store         storage.Storage // nil means no DB persistence
 }
 
+// Watcher subscribes to Transfer logs for a single ERC-20 token and writes matching events to its configured output.
 type Watcher struct {
 	client EthClient
 	cfg    Config
@@ -71,6 +76,7 @@ var chainNames = map[int64]string{
 	11155111: "Sepolia",
 }
 
+// chainName returns a human-readable name for a chain ID, falling back to "chain <id>" for unknowns.
 func chainName(id *big.Int) string {
 	if id.IsInt64() {
 		if name, ok := chainNames[id.Int64()]; ok {
@@ -95,6 +101,7 @@ func Dial(ctx context.Context, rpcURL string) (EthClient, error) {
 	return client, nil
 }
 
+// New creates a Watcher using the given client and config, opening the output writer.
 func New(client EthClient, cfg Config) (*Watcher, error) {
 	writer, err := newTransferWriter(cfg.OutputFormat, cfg.OutputPath)
 	if err != nil {
@@ -103,6 +110,7 @@ func New(client EthClient, cfg Config) (*Watcher, error) {
 	return &Watcher{client: client, cfg: cfg, writer: writer}, nil
 }
 
+// Close flushes and closes the output writer, storage backend, and RPC client.
 func (w *Watcher) Close() {
 	if err := w.writer.close(); err != nil {
 		log.Printf("closing output writer: %v", err)
@@ -115,6 +123,7 @@ func (w *Watcher) Close() {
 	w.client.Close()
 }
 
+// Start subscribes to Transfer logs from the latest block and processes them until ctx is cancelled.
 func (w *Watcher) Start(ctx context.Context) error {
 	header, err := w.client.HeaderByNumber(ctx, nil)
 	if err != nil {
@@ -154,6 +163,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 	}
 }
 
+// printLog applies all configured filters to a raw log and, if it passes, writes it to the output and storage.
 func (w *Watcher) printLog(ctx context.Context, l types.Log) {
 	if len(l.Topics) != 3 || l.Topics[0] != transferSig {
 		return

@@ -55,6 +55,7 @@ func main() {
 	}
 }
 
+// promptRPCURL interactively asks the user for a WebSocket RPC URL and validates the scheme.
 func promptRPCURL() (string, error) {
 	var url string
 	form := huh.NewForm(
@@ -78,6 +79,7 @@ func promptRPCURL() (string, error) {
 	return url, nil
 }
 
+// promptConfig runs the interactive huh form and returns a fully populated Config ready for watcher.New.
 func promptConfig(ctx context.Context, client watcher.EthClient) (watcher.Config, error) {
 	// customIdx is the sentinel value bound to the "Custom address..." option in
 	// the token select. -1 is intentionally out of range of watcher.Tokens indices

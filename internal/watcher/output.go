@@ -7,14 +7,16 @@ import (
 	"strconv"
 )
 
+// OutputFormat selects where and how transfer records are written.
 type OutputFormat int
 
 const (
-	FormatStdout   OutputFormat = iota
-	FormatCSV
-	FormatMarkdown
+	FormatStdout   OutputFormat = iota // print to terminal
+	FormatCSV                          // write to a CSV file
+	FormatMarkdown                     // write to a Markdown table file
 )
 
+// transferRecord is the in-memory representation of a single Transfer event passed to output writers.
 type transferRecord struct {
 	Block  uint64
 	TxHash string
@@ -24,11 +26,13 @@ type transferRecord struct {
 	Symbol string
 }
 
+// transferWriter is the sink that receives decoded transfer records for formatting and output.
 type transferWriter interface {
 	write(r transferRecord) error
 	close() error
 }
 
+// newTransferWriter constructs the appropriate transferWriter for the given format, opening a file at path when needed.
 func newTransferWriter(format OutputFormat, path string) (transferWriter, error) {
 	switch format {
 	case FormatCSV:
@@ -40,8 +44,7 @@ func newTransferWriter(format OutputFormat, path string) (transferWriter, error)
 	}
 }
 
-// stdoutWriter
-
+// stdoutWriter prints each transfer record to standard output.
 type stdoutWriter struct{}
 
 func (w *stdoutWriter) write(r transferRecord) error {
@@ -52,13 +55,13 @@ func (w *stdoutWriter) write(r transferRecord) error {
 
 func (w *stdoutWriter) close() error { return nil }
 
-// csvWriter
-
+// csvWriter writes transfer records to a CSV file, with a header row written on construction.
 type csvWriter struct {
 	f   *os.File
 	csv *csv.Writer
 }
 
+// newCSVWriter creates the file at path and writes the CSV header row.
 func newCSVWriter(path string) (*csvWriter, error) {
 	f, err := os.Create(path)
 	if err != nil {
@@ -89,12 +92,12 @@ func (w *csvWriter) close() error {
 	return w.f.Close()
 }
 
-// markdownWriter
-
+// markdownWriter appends transfer records as rows to a GitHub-flavoured Markdown table.
 type markdownWriter struct {
 	f *os.File
 }
 
+// newMarkdownWriter creates the file at path and writes the Markdown table header and separator.
 func newMarkdownWriter(path string) (*markdownWriter, error) {
 	f, err := os.Create(path)
 	if err != nil {

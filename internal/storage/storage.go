@@ -1,3 +1,4 @@
+// Package storage defines the persistence types and interface shared by all storage backends.
 package storage
 
 import (

@@ -16,10 +16,12 @@ type Store struct {
 	transfers []storage.Transfer
 }
 
+// New returns an empty, ready-to-use Store.
 func New() *Store {
 	return &Store{}
 }
 
+// SaveTransfer appends t to the in-memory list for later inspection by tests.
 func (s *Store) SaveTransfer(_ context.Context, t storage.Transfer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -27,6 +29,7 @@ func (s *Store) SaveTransfer(_ context.Context, t storage.Transfer) error {
 	return nil
 }
 
+// Close is a no-op; the in-memory store requires no teardown.
 func (s *Store) Close() error { return nil }
 
 // Len returns the number of transfers recorded so far.
