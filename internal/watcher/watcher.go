@@ -14,7 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/leohhhn/evm-watcher/internal/storage"
+	"github.com/leohhhn/tokentail/internal/storage"
 )
 
 var transferSig = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))

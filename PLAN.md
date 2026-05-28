@@ -1,4 +1,4 @@
-# evm-watcher — Implementation Plan
+# tokentail — Implementation Plan
 
 ## Current state
 
@@ -148,7 +148,7 @@ type EthClient interface {
 ### File structure (after all phases)
 
 ```
-evm-watcher/
+tokentail/
 ├── cmd/watcher/
 │   └── main.go
 ├── internal/

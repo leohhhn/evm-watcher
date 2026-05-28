@@ -13,7 +13,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/joho/godotenv"
-	"github.com/leohhhn/evm-watcher/internal/watcher"
+	"github.com/leohhhn/tokentail/internal/watcher"
 )
 
 func main() {

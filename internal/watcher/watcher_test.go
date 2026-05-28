@@ -7,8 +7,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/leohhhn/evm-watcher/internal/storage"
-	"github.com/leohhhn/evm-watcher/internal/storage/memory"
+	"github.com/leohhhn/tokentail/internal/storage"
+	"github.com/leohhhn/tokentail/internal/storage/memory"
 )
 
 // buildLog constructs a synthetic ERC-20 Transfer log for use in tests.

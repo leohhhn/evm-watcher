@@ -7,7 +7,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/leohhhn/evm-watcher/internal/storage"
+	"github.com/leohhhn/tokentail/internal/storage"
 )
 
 // Store is a thread-safe in-memory Storage spy.

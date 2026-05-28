@@ -1,4 +1,4 @@
-# evm-watcher
+# tokentail
 
 A CLI tool for watching ERC-20 token transfer events on EVM-compatible chains in real time. Connect to any WebSocket RPC endpoint, configure filters interactively, and stream matching transfers to your terminal or export them to CSV or Markdown.
 
@@ -6,7 +6,7 @@ A CLI tool for watching ERC-20 token transfer events on EVM-compatible chains in
 
 ## How it works
 
-On startup, evm-watcher connects to an Ethereum node over WebSocket and uses `eth_subscribe` to receive logs as they are included in new blocks. It filters the raw log stream server-side (by contract address and Transfer topic) and applies client-side filters (amount range, specific address) before writing each matching event to the configured output.
+On startup, tokentail connects to an Ethereum node over WebSocket and uses `eth_subscribe` to receive logs as they are included in new blocks. It filters the raw log stream server-side (by contract address and Transfer topic) and applies client-side filters (amount range, specific address) before writing each matching event to the configured output.
 
 Token decimals and symbols for custom addresses are resolved on-chain via `eth_call` against the ERC-20 `symbol()` and `decimals()` view functions before the subscription starts.
 
@@ -95,8 +95,8 @@ Output files are created when the watcher starts and flushed and closed on shutd
 
 ```bash
 # Clone and build
-git clone https://github.com/leohhhn/evm-watcher
-cd evm-watcher
+git clone https://github.com/leohhhn/tokentail
+cd tokentail
 
 # (Optional) set RPC URL
 cp .env.example .env
@@ -118,7 +118,7 @@ The interactive form walks through:
 ## Project structure
 
 ```
-evm-watcher/
+tokentail/
 ├── cmd/watcher/
 │   └── main.go          # Entry point, interactive form, wiring
 ├── internal/watcher/

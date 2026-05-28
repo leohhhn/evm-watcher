@@ -1,4 +1,4 @@
-module github.com/leohhhn/evm-watcher
+module github.com/leohhhn/tokentail
 
 go 1.24.5
 
