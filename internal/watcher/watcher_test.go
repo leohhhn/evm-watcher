@@ -66,7 +66,7 @@ func TestDecimalsToFactor(t *testing.T) {
 func TestPrintLog_BelowMinAmount(t *testing.T) {
 	store := memory.New()
 	w := newTestWatcher(Config{
-		Token:     Tokens[0], // USDC, 6 decimals
+		Token:     tokens[0], // USDC, 6 decimals
 		MinAmount: 1000,
 	}, store)
 
@@ -82,7 +82,7 @@ func TestPrintLog_BelowMinAmount(t *testing.T) {
 func TestPrintLog_AboveMinAmount(t *testing.T) {
 	store := memory.New()
 	w := newTestWatcher(Config{
-		Token:     Tokens[0],
+		Token:     tokens[0],
 		MinAmount: 1000,
 	}, store)
 
@@ -98,7 +98,7 @@ func TestPrintLog_AboveMinAmount(t *testing.T) {
 func TestPrintLog_AboveMaxAmount(t *testing.T) {
 	store := memory.New()
 	w := newTestWatcher(Config{
-		Token:     Tokens[0],
+		Token:     tokens[0],
 		MinAmount: 0,
 		MaxAmount: 500,
 	}, store)
@@ -115,7 +115,7 @@ func TestPrintLog_AboveMaxAmount(t *testing.T) {
 func TestPrintLog_MaxAmountZeroMeansNoLimit(t *testing.T) {
 	store := memory.New()
 	w := newTestWatcher(Config{
-		Token:     Tokens[0],
+		Token:     tokens[0],
 		MinAmount: 0,
 		MaxAmount: 0, // no limit
 	}, store)
@@ -136,7 +136,7 @@ func TestPrintLog_AddressFilterMatch(t *testing.T) {
 	other := common.HexToAddress("0x2222222222222222222222222222222222222222")
 
 	w := newTestWatcher(Config{
-		Token:         Tokens[0],
+		Token:         tokens[0],
 		FilterAddress: target,
 	}, store)
 
@@ -158,7 +158,7 @@ func TestPrintLog_AddressFilterMatch(t *testing.T) {
 
 func TestPrintLog_WrongTopicCount(t *testing.T) {
 	store := memory.New()
-	w := newTestWatcher(Config{Token: Tokens[0]}, store)
+	w := newTestWatcher(Config{Token: tokens[0]}, store)
 
 	l := types.Log{
 		BlockNumber: 1,
@@ -174,7 +174,7 @@ func TestPrintLog_WrongTopicCount(t *testing.T) {
 
 func TestPrintLog_WrongTopic0(t *testing.T) {
 	store := memory.New()
-	w := newTestWatcher(Config{Token: Tokens[0]}, store)
+	w := newTestWatcher(Config{Token: tokens[0]}, store)
 
 	raw := new(big.Int).Mul(big.NewInt(100), big.NewInt(1e6))
 	l := buildLog(1, common.Address{1}, common.Address{2}, raw)
@@ -194,7 +194,7 @@ func TestPrintLog_StorageFields(t *testing.T) {
 	from := common.HexToAddress("0xAAAA000000000000000000000000000000000001")
 	to := common.HexToAddress("0xBBBB000000000000000000000000000000000002")
 
-	w := newTestWatcher(Config{Token: Tokens[0]}, store)
+	w := newTestWatcher(Config{Token: tokens[0]}, store)
 
 	raw := new(big.Int).Mul(big.NewInt(500), big.NewInt(1e6))
 	w.printLog(context.Background(), buildLog(42, from, to, raw))
@@ -202,7 +202,7 @@ func TestPrintLog_StorageFields(t *testing.T) {
 	if store.Len() != 1 {
 		t.Fatalf("expected 1 transfer, got %d", store.Len())
 	}
-	got := store.Transfers[0]
+	got := store.Get(0)
 	if got.Block != 42 {
 		t.Errorf("Block: got %d, want 42", got.Block)
 	}

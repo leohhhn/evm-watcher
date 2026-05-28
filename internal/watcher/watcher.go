@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -13,9 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/leohhhn/evm-watcher/internal/storage"
 )
-
-// add chain filter
-// add option to write out to file instead of stdout
 
 var transferSig = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
 
@@ -33,11 +31,17 @@ func decimalsToFactor(decimals uint8) *big.Float {
 	return new(big.Float).SetInt(exp)
 }
 
-// Tokens is the set of popular tokens available as quick-select options.
-var Tokens = []Token{
+var tokens = []Token{
 	{Symbol: "USDC", Address: common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"), Decimals: decimalsToFactor(6)},
 	{Symbol: "USDT", Address: common.HexToAddress("0xdAC17F958D2ee523a2206206994597C13D831ec7"), Decimals: decimalsToFactor(6)},
 	{Symbol: "DAI", Address: common.HexToAddress("0x6B175474E89094C44Da98b954EedeAC495271d0F"), Decimals: decimalsToFactor(18)},
+}
+
+// AvailableTokens returns a copy of the built-in token list.
+func AvailableTokens() []Token {
+	out := make([]Token, len(tokens))
+	copy(out, tokens)
+	return out
 }
 
 type Config struct {
@@ -68,8 +72,10 @@ var chainNames = map[int64]string{
 }
 
 func chainName(id *big.Int) string {
-	if name, ok := chainNames[id.Int64()]; ok {
-		return name
+	if id.IsInt64() {
+		if name, ok := chainNames[id.Int64()]; ok {
+			return name
+		}
 	}
 	return fmt.Sprintf("chain %s", id)
 }
@@ -121,7 +127,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 		Topics:    [][]common.Hash{{transferSig}},
 	}
 
-	logs := make(chan types.Log)
+	logs := make(chan types.Log, 64)
 	sub, err := w.client.SubscribeFilterLogs(ctx, query, logs)
 	if err != nil {
 		return fmt.Errorf("subscribe: %w", err)
@@ -185,13 +191,14 @@ func (w *Watcher) printLog(ctx context.Context, l types.Log) {
 
 	if store := w.cfg.Store; store != nil {
 		t := storage.Transfer{
-			Block:    rec.Block,
-			TxHash:   rec.TxHash,
-			LogIndex: uint(l.Index),
-			Token:    rec.Symbol,
-			From:     rec.From,
-			To:       rec.To,
-			Amount:   rec.Amount,
+			Block:     rec.Block,
+			TxHash:    rec.TxHash,
+			LogIndex:  uint(l.Index),
+			Token:     rec.Symbol,
+			From:      rec.From,
+			To:        rec.To,
+			Amount:    rec.Amount,
+			CreatedAt: time.Now(),
 		}
 		if err := store.SaveTransfer(ctx, t); err != nil {
 			log.Printf("storage error: %v", err)

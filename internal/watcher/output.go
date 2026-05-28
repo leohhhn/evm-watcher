@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"strconv"
 )
 
 type OutputFormat int
@@ -73,19 +74,14 @@ func newCSVWriter(path string) (*csvWriter, error) {
 }
 
 func (w *csvWriter) write(r transferRecord) error {
-	err := w.csv.Write([]string{
-		fmt.Sprintf("%d", r.Block),
+	return w.csv.Write([]string{
+		strconv.FormatUint(r.Block, 10),
 		r.TxHash,
 		r.From,
 		r.To,
 		fmt.Sprintf("%.6f", r.Amount),
 		r.Symbol,
 	})
-	if err != nil {
-		return err
-	}
-	w.csv.Flush()
-	return w.csv.Error()
 }
 
 func (w *csvWriter) close() error {

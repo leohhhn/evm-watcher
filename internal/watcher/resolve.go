@@ -15,19 +15,24 @@ const minimalERC20ABI = `[
   {"name":"decimals","type":"function","inputs":[],"outputs":[{"name":"","type":"uint8"}], "stateMutability":"view"}
 ]`
 
+var erc20ABI abi.ABI
+
+func init() {
+	var err error
+	erc20ABI, err = abi.JSON(strings.NewReader(minimalERC20ABI))
+	if err != nil {
+		panic("parse erc20 ABI: " + err.Error())
+	}
+}
+
 // ResolveToken fetches symbol and decimals given an ERC-20 contract address on-chain.
 func ResolveToken(ctx context.Context, client EthClient, addr common.Address) (Token, error) {
-	parsed, err := abi.JSON(strings.NewReader(minimalERC20ABI))
-	if err != nil {
-		return Token{}, fmt.Errorf("parse abi: %w", err)
-	}
-
-	symbol, err := callString(ctx, client, addr, parsed, "symbol")
+	symbol, err := callString(ctx, client, addr, &erc20ABI, "symbol")
 	if err != nil {
 		return Token{}, fmt.Errorf("symbol(): %w", err)
 	}
 
-	decimals, err := callUint8(ctx, client, addr, parsed, "decimals")
+	decimals, err := callUint8(ctx, client, addr, &erc20ABI, "decimals")
 	if err != nil {
 		return Token{}, fmt.Errorf("decimals(): %w", err)
 	}
@@ -51,7 +56,7 @@ func ResolveToken(ctx context.Context, client EthClient, addr common.Address) (T
 // Returns an error if ABI encoding fails, the RPC call is rejected (e.g. the
 // address is not a contract, or the node returned a revert), or decoding the
 // response produces no values.
-func callString(ctx context.Context, client EthClient, addr common.Address, parsed abi.ABI, method string) (string, error) {
+func callString(ctx context.Context, client EthClient, addr common.Address, parsed *abi.ABI, method string) (string, error) {
 	data, err := parsed.Pack(method)
 	if err != nil {
 		return "", err
@@ -80,7 +85,7 @@ func callString(ctx context.Context, client EthClient, addr common.Address, pars
 //
 // The same caveats apply as callString: method must exist in parsed, its first
 // return type must be "uint8", and a type mismatch will panic at the assertion.
-func callUint8(ctx context.Context, client EthClient, addr common.Address, parsed abi.ABI, method string) (uint8, error) {
+func callUint8(ctx context.Context, client EthClient, addr common.Address, parsed *abi.ABI, method string) (uint8, error) {
 	data, err := parsed.Pack(method)
 	if err != nil {
 		return 0, err

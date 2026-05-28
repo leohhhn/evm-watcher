@@ -85,11 +85,12 @@ func promptConfig(ctx context.Context, client watcher.EthClient) (watcher.Config
 	const customIdx = -1
 
 	// Build select options: predefined tokens + custom.
-	options := make([]huh.Option[int], len(watcher.Tokens)+1)
-	for i, t := range watcher.Tokens {
+	available := watcher.AvailableTokens()
+	options := make([]huh.Option[int], len(available)+1)
+	for i, t := range available {
 		options[i] = huh.NewOption(t.Symbol, i)
 	}
-	options[len(watcher.Tokens)] = huh.NewOption("Custom address...", customIdx)
+	options[len(available)] = huh.NewOption("Custom address...", customIdx)
 
 	var (
 		tokenIdx     int
@@ -206,7 +207,7 @@ func promptConfig(ctx context.Context, client watcher.EthClient) (watcher.Config
 		token = resolved
 		log.Printf("resolved: %s (%s)", token.Symbol, token.Address.Hex())
 	} else {
-		token = watcher.Tokens[tokenIdx]
+		token = available[tokenIdx]
 	}
 
 	minAmount, err := strconv.ParseFloat(minAmountStr, 64)

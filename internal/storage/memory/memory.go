@@ -13,7 +13,7 @@ import (
 // Store is a thread-safe in-memory Storage spy.
 type Store struct {
 	mu        sync.Mutex
-	Transfers []storage.Transfer
+	transfers []storage.Transfer
 }
 
 func New() *Store {
@@ -23,7 +23,7 @@ func New() *Store {
 func (s *Store) SaveTransfer(_ context.Context, t storage.Transfer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Transfers = append(s.Transfers, t)
+	s.transfers = append(s.transfers, t)
 	return nil
 }
 
@@ -33,12 +33,19 @@ func (s *Store) Close() error { return nil }
 func (s *Store) Len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.Transfers)
+	return len(s.transfers)
+}
+
+// Get returns the transfer at index i under the lock.
+func (s *Store) Get(i int) storage.Transfer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.transfers[i]
 }
 
 // Reset clears all recorded transfers.
 func (s *Store) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Transfers = nil
+	s.transfers = nil
 }
