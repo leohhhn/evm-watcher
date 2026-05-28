@@ -17,6 +17,196 @@ import (
 	"github.com/leohhhn/tokentail/internal/storage"
 )
 
+// FilterConfig holds the runtime filter parameters: which token to watch and
+// which transfers to include.
+type FilterConfig struct {
+	Token         Token
+	MinAmount     float64
+	MaxAmount     float64
+	FilterAddress common.Address // zero value means no filter
+}
+
+// Config holds all runtime options controlling what the Watcher observes and
+// where it writes output.
+type Config struct {
+	Filter       FilterConfig
+	OutputFormat OutputFormat
+	OutputPath   string          // only used when OutputFormat is not FormatStdout
+	Store        storage.Storage // nil means no DB persistence
+}
+
+// headerCache caches block headers by number so each block is fetched from the
+// node at most once, regardless of how many transfers it contains. Used primarily to resolve block timestamps without
+// blocking the main log processing loop.
+type headerCache map[uint64]*types.Header
+
+func (c headerCache) get(ctx context.Context, client EthClient, blockNum uint64) (*types.Header, error) {
+	if h, ok := c[blockNum]; ok {
+		return h, nil
+	}
+	h, err := client.HeaderByNumber(ctx, new(big.Int).SetUint64(blockNum))
+	if err != nil {
+		return nil, err
+	}
+	c[blockNum] = h
+	return h, nil
+}
+
+// Watcher subscribes to Transfer logs for a single ERC-20 token and writes
+// matching events to its configured output.
+type Watcher struct {
+	client  EthClient
+	cfg     Config
+	writer  transferWriter
+	headers headerCache
+}
+
+// Dial connects to an Ethereum node and logs the chain name and ID.
+func Dial(ctx context.Context, rpcURL string) (EthClient, error) {
+	client, err := ethclient.DialContext(ctx, rpcURL)
+	if err != nil {
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+	chainID, err := client.ChainID(ctx)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("get chain ID: %w", err)
+	}
+	log.Printf("connected to %s (chain ID %s)", chainName(chainID), chainID)
+	return client, nil
+}
+
+// New creates a Watcher using the given client and config, opening the output writer.
+func New(client EthClient, cfg Config) (*Watcher, error) {
+	writer, err := newTransferWriter(cfg.OutputFormat, cfg.OutputPath)
+	if err != nil {
+		return nil, fmt.Errorf("open output: %w", err)
+	}
+	return &Watcher{
+		client:  client,
+		cfg:     cfg,
+		writer:  writer,
+		headers: make(headerCache),
+	}, nil
+}
+
+// Close flushes and closes the output writer, storage backend, and RPC client.
+func (w *Watcher) Close() {
+	if err := w.writer.close(); err != nil {
+		log.Printf("closing output writer: %v", err)
+	}
+	if store := w.cfg.Store; store != nil {
+		if err := store.Close(); err != nil {
+			log.Printf("closing storage: %v", err)
+		}
+	}
+	w.client.Close()
+}
+
+// Start subscribes to Transfer logs from the latest block and processes them
+// until ctx is cancelled. Header fetches are owned here so processLog stays
+// free of network I/O.
+func (w *Watcher) Start(ctx context.Context) error {
+	header, err := w.client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("get latest block: %w", err)
+	}
+
+	query := ethereum.FilterQuery{
+		FromBlock: header.Number,
+		Addresses: []common.Address{w.cfg.Filter.Token.Address},
+		Topics:    [][]common.Hash{{transferSig}},
+	}
+
+	logs := make(chan types.Log, 64)
+	sub, err := w.client.SubscribeFilterLogs(ctx, query, logs)
+	if err != nil {
+		return fmt.Errorf("subscribe: %w", err)
+	}
+	defer sub.Unsubscribe()
+
+	log.Printf("watching %s transfers (min %.2f, max %.2f)",
+		w.cfg.Filter.Token.Symbol,
+		w.cfg.Filter.MinAmount,
+		w.cfg.Filter.MaxAmount,
+	)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-sub.Err():
+			return fmt.Errorf("subscription error: %w", err)
+		case l := <-logs:
+			var blockTime time.Time
+			if h, err := w.headers.get(ctx, w.client, l.BlockNumber); err != nil {
+				log.Printf("fetch block %d header: %v", l.BlockNumber, err)
+			} else {
+				blockTime = time.Unix(int64(h.Time), 0).UTC()
+			}
+			w.processLog(ctx, l, blockTime)
+		}
+	}
+}
+
+// processLog applies all configured filters to a raw log and, if it passes,
+// writes it to the output writer and storage. blockTime is the timestamp of
+// the containing block, resolved by the caller.
+func (w *Watcher) processLog(ctx context.Context, l types.Log, blockTime time.Time) {
+	if len(l.Topics) != 3 || l.Topics[0] != transferSig {
+		return
+	}
+
+	from := common.HexToAddress(l.Topics[1].Hex())
+	to := common.HexToAddress(l.Topics[2].Hex())
+
+	if f := w.cfg.Filter.FilterAddress; f != (common.Address{}) && from != f && to != f {
+		return
+	}
+
+	raw := new(big.Int).SetBytes(l.Data)
+	amount, _ := new(big.Float).Quo(new(big.Float).SetInt(raw), w.cfg.Filter.Token.Decimals).Float64()
+
+	if amount < w.cfg.Filter.MinAmount {
+		return
+	}
+	if w.cfg.Filter.MaxAmount > 0 && amount > w.cfg.Filter.MaxAmount {
+		return
+	}
+
+	rec := transferRecord{
+		Block:     l.BlockNumber,
+		LogIndex:  uint(l.Index),
+		Timestamp: blockTime,
+		TxHash:    l.TxHash.Hex(),
+		From:      from.Hex(),
+		To:        to.Hex(),
+		Amount:    amount,
+		Symbol:    w.cfg.Filter.Token.Symbol,
+	}
+
+	if err := w.writer.write(rec); err != nil {
+		log.Printf("write error: %v", err)
+	}
+
+	if store := w.cfg.Store; store != nil {
+		if err := store.SaveTransfer(ctx, storage.Transfer{
+			Block:     rec.Block,
+			TxHash:    rec.TxHash,
+			LogIndex:  rec.LogIndex,
+			Token:     rec.Symbol,
+			From:      rec.From,
+			To:        rec.To,
+			Amount:    rec.Amount,
+			Timestamp: rec.Timestamp,
+			CreatedAt: time.Now(),
+		}); err != nil {
+			log.Printf("storage error: %v", err)
+		}
+	}
+}
+
+// transferSig is the Keccak-256 hash of the ERC-20 Transfer event signature, used to filter logs by topic.
 var transferSig = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
 
 // Token holds the on-chain identity and decimal precision of an ERC-20 token.
@@ -47,25 +237,7 @@ func AvailableTokens() []Token {
 	return out
 }
 
-// Config holds all runtime options that control what the Watcher observes and where it writes output.
-type Config struct {
-	Token         Token
-	MinAmount     float64
-	MaxAmount     float64
-	FilterAddress common.Address // zero value means no filter
-	OutputFormat  OutputFormat
-	OutputPath    string         // only used when OutputFormat is not FormatStdout
-	Store         storage.Storage // nil means no DB persistence
-}
-
-// Watcher subscribes to Transfer logs for a single ERC-20 token and writes matching events to its configured output.
-type Watcher struct {
-	client      EthClient
-	cfg         Config
-	writer      transferWriter
-	headerCache map[uint64]*types.Header
-}
-
+// chainNames maps well-known chain IDs to human-readable names for logging purposes.
 var chainNames = map[int64]string{
 	1:        "Ethereum Mainnet",
 	10:       "Optimism",
@@ -85,156 +257,4 @@ func chainName(id *big.Int) string {
 		}
 	}
 	return fmt.Sprintf("chain %s", id)
-}
-
-// Dial connects to an Ethereum node and logs the chain name and ID.
-func Dial(ctx context.Context, rpcURL string) (EthClient, error) {
-	client, err := ethclient.DialContext(ctx, rpcURL)
-	if err != nil {
-		return nil, fmt.Errorf("dial: %w", err)
-	}
-	chainID, err := client.ChainID(ctx)
-	if err != nil {
-		client.Close()
-		return nil, fmt.Errorf("get chain ID: %w", err)
-	}
-	log.Printf("connected to %s (chain ID %s)", chainName(chainID), chainID)
-	return client, nil
-}
-
-// New creates a Watcher using the given client and config, opening the output writer.
-func New(client EthClient, cfg Config) (*Watcher, error) {
-	writer, err := newTransferWriter(cfg.OutputFormat, cfg.OutputPath)
-	if err != nil {
-		return nil, fmt.Errorf("open output: %w", err)
-	}
-	return &Watcher{client: client, cfg: cfg, writer: writer, headerCache: make(map[uint64]*types.Header)}, nil
-}
-
-// Close flushes and closes the output writer, storage backend, and RPC client.
-func (w *Watcher) Close() {
-	if err := w.writer.close(); err != nil {
-		log.Printf("closing output writer: %v", err)
-	}
-	if store := w.cfg.Store; store != nil {
-		if err := store.Close(); err != nil {
-			log.Printf("closing storage: %v", err)
-		}
-	}
-	w.client.Close()
-}
-
-// Start subscribes to Transfer logs from the latest block and processes them until ctx is cancelled.
-func (w *Watcher) Start(ctx context.Context) error {
-	header, err := w.client.HeaderByNumber(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("get latest block: %w", err)
-	}
-
-	query := ethereum.FilterQuery{
-		FromBlock: header.Number,
-		Addresses: []common.Address{w.cfg.Token.Address},
-		Topics:    [][]common.Hash{{transferSig}},
-	}
-
-	logs := make(chan types.Log, 64)
-	sub, err := w.client.SubscribeFilterLogs(ctx, query, logs)
-	if err != nil {
-		return fmt.Errorf("subscribe: %w", err)
-	}
-	defer sub.Unsubscribe()
-
-	log.Printf("watching %s transfers (min %.2f %s, max %.2f %s) ",
-		w.cfg.Token.Symbol,
-		w.cfg.MinAmount,
-		w.cfg.Token.Symbol,
-		w.cfg.MaxAmount,
-		w.cfg.Token.Symbol,
-	)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case err := <-sub.Err():
-			return fmt.Errorf("subscription error: %w", err)
-		case l := <-logs:
-			w.printLog(ctx, l)
-		}
-	}
-}
-
-// cachedHeader returns the block header for blockNum, fetching it from the node only on the first call per block.
-func (w *Watcher) cachedHeader(ctx context.Context, blockNum uint64) (*types.Header, error) {
-	if h, ok := w.headerCache[blockNum]; ok {
-		return h, nil
-	}
-	h, err := w.client.HeaderByNumber(ctx, new(big.Int).SetUint64(blockNum))
-	if err != nil {
-		return nil, err
-	}
-	w.headerCache[blockNum] = h
-	return h, nil
-}
-
-// printLog applies all configured filters to a raw log and, if it passes, writes it to the output and storage.
-func (w *Watcher) printLog(ctx context.Context, l types.Log) {
-	if len(l.Topics) != 3 || l.Topics[0] != transferSig {
-		return
-	}
-
-	from := common.HexToAddress(l.Topics[1].Hex())
-	to := common.HexToAddress(l.Topics[2].Hex())
-
-	if f := w.cfg.FilterAddress; f != (common.Address{}) && from != f && to != f {
-		return
-	}
-
-	raw := new(big.Int).SetBytes(l.Data)
-	amount, _ := new(big.Float).Quo(new(big.Float).SetInt(raw), w.cfg.Token.Decimals).Float64()
-
-	if amount < w.cfg.MinAmount {
-		return
-	}
-	if w.cfg.MaxAmount > 0 && amount > w.cfg.MaxAmount {
-		return
-	}
-
-	var blockTime time.Time
-	if header, err := w.cachedHeader(ctx, l.BlockNumber); err != nil {
-		log.Printf("fetch block %d header: %v", l.BlockNumber, err)
-	} else {
-		blockTime = time.Unix(int64(header.Time), 0).UTC()
-	}
-
-	rec := transferRecord{
-		Block:     l.BlockNumber,
-		Timestamp: blockTime,
-		TxHash:    l.TxHash.Hex(),
-		From:      from.Hex(),
-		To:        to.Hex(),
-		Amount:    amount,
-		Symbol:    w.cfg.Token.Symbol,
-	}
-
-	if err := w.writer.write(rec); err != nil {
-		log.Printf("write error: %v", err)
-	}
-
-	if store := w.cfg.Store; store != nil {
-		t := storage.Transfer{
-			Block:     rec.Block,
-			TxHash:    rec.TxHash,
-			LogIndex:  uint(l.Index),
-			Token:     rec.Symbol,
-			From:      rec.From,
-			To:        rec.To,
-			Amount:    rec.Amount,
-			Timestamp: rec.Timestamp,
-			CreatedAt: time.Now(),
-		}
-		if err := store.SaveTransfer(ctx, t); err != nil {
-			log.Printf("storage error: %v", err)
-		}
-	}
 }

@@ -13,10 +13,11 @@ import (
 	"github.com/leohhhn/tokentail/internal/storage/memory"
 )
 
-// mockBlockTime is the fixed Unix timestamp returned by mockClient for all blocks.
+// mockBlockTime is the fixed Unix timestamp passed as blockTime in tests.
 const mockBlockTime = 1_700_000_000
 
-// mockClient is a minimal EthClient that returns a fixed block header timestamp.
+// mockClient is a minimal EthClient that satisfies the interface for wiring;
+// it is not called by processLog so its return values are immaterial in unit tests.
 type mockClient struct{}
 
 func (m *mockClient) ChainID(_ context.Context) (*big.Int, error) { return big.NewInt(1), nil }
@@ -56,12 +57,15 @@ func buildLog(block uint64, from, to common.Address, amount *big.Int) types.Log 
 func newTestWatcher(cfg Config, store *memory.Store) *Watcher {
 	cfg.Store = store
 	return &Watcher{
-		client:      &mockClient{},
-		cfg:         cfg,
-		writer:      &stdoutWriter{},
-		headerCache: make(map[uint64]*types.Header),
+		client:  &mockClient{},
+		cfg:     cfg,
+		writer:  &stdoutWriter{},
+		headers: make(headerCache),
 	}
 }
+
+// testBlockTime is the time.Time value passed as blockTime in all unit tests.
+var testBlockTime = time.Unix(mockBlockTime, 0).UTC()
 
 // --- decimalsToFactor ---
 
@@ -87,13 +91,15 @@ func TestDecimalsToFactor(t *testing.T) {
 func TestPrintLog_BelowMinAmount(t *testing.T) {
 	store := memory.New()
 	w := newTestWatcher(Config{
-		Token:     tokens[0], // USDC, 6 decimals
-		MinAmount: 1000,
+		Filter: FilterConfig{
+			Token:     tokens[0], // USDC, 6 decimals
+			MinAmount: 1000,
+		},
 	}, store)
 
 	// 500 USDC = 500_000_000 raw
 	raw := new(big.Int).Mul(big.NewInt(500), big.NewInt(1e6))
-	w.printLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw))
+	w.processLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw), testBlockTime)
 
 	if store.Len() != 0 {
 		t.Errorf("expected no transfers stored, got %d", store.Len())
@@ -103,13 +109,15 @@ func TestPrintLog_BelowMinAmount(t *testing.T) {
 func TestPrintLog_AboveMinAmount(t *testing.T) {
 	store := memory.New()
 	w := newTestWatcher(Config{
-		Token:     tokens[0],
-		MinAmount: 1000,
+		Filter: FilterConfig{
+			Token:     tokens[0],
+			MinAmount: 1000,
+		},
 	}, store)
 
 	// 2000 USDC
 	raw := new(big.Int).Mul(big.NewInt(2000), big.NewInt(1e6))
-	w.printLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw))
+	w.processLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw), testBlockTime)
 
 	if store.Len() != 1 {
 		t.Errorf("expected 1 transfer stored, got %d", store.Len())
@@ -119,14 +127,16 @@ func TestPrintLog_AboveMinAmount(t *testing.T) {
 func TestPrintLog_AboveMaxAmount(t *testing.T) {
 	store := memory.New()
 	w := newTestWatcher(Config{
-		Token:     tokens[0],
-		MinAmount: 0,
-		MaxAmount: 500,
+		Filter: FilterConfig{
+			Token:     tokens[0],
+			MinAmount: 0,
+			MaxAmount: 500,
+		},
 	}, store)
 
 	// 1000 USDC — above max
 	raw := new(big.Int).Mul(big.NewInt(1000), big.NewInt(1e6))
-	w.printLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw))
+	w.processLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw), testBlockTime)
 
 	if store.Len() != 0 {
 		t.Errorf("expected no transfers stored, got %d", store.Len())
@@ -136,13 +146,15 @@ func TestPrintLog_AboveMaxAmount(t *testing.T) {
 func TestPrintLog_MaxAmountZeroMeansNoLimit(t *testing.T) {
 	store := memory.New()
 	w := newTestWatcher(Config{
-		Token:     tokens[0],
-		MinAmount: 0,
-		MaxAmount: 0, // no limit
+		Filter: FilterConfig{
+			Token:     tokens[0],
+			MinAmount: 0,
+			MaxAmount: 0, // no limit
+		},
 	}, store)
 
 	raw := new(big.Int).Mul(big.NewInt(999_999_999), big.NewInt(1e6))
-	w.printLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw))
+	w.processLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw), testBlockTime)
 
 	if store.Len() != 1 {
 		t.Errorf("expected 1 transfer stored, got %d", store.Len())
@@ -157,18 +169,20 @@ func TestPrintLog_AddressFilterMatch(t *testing.T) {
 	other := common.HexToAddress("0x2222222222222222222222222222222222222222")
 
 	w := newTestWatcher(Config{
-		Token:         tokens[0],
-		FilterAddress: target,
+		Filter: FilterConfig{
+			Token:         tokens[0],
+			FilterAddress: target,
+		},
 	}, store)
 
 	raw := new(big.Int).Mul(big.NewInt(100), big.NewInt(1e6))
 
 	// target is sender — should pass
-	w.printLog(context.Background(), buildLog(1, target, other, raw))
+	w.processLog(context.Background(), buildLog(1, target, other, raw), testBlockTime)
 	// target is recipient — should pass
-	w.printLog(context.Background(), buildLog(2, other, target, raw))
+	w.processLog(context.Background(), buildLog(2, other, target, raw), testBlockTime)
 	// target not involved — should be filtered
-	w.printLog(context.Background(), buildLog(3, other, common.Address{9}, raw))
+	w.processLog(context.Background(), buildLog(3, other, common.Address{9}, raw), testBlockTime)
 
 	if store.Len() != 2 {
 		t.Errorf("expected 2 transfers stored, got %d", store.Len())
@@ -179,14 +193,14 @@ func TestPrintLog_AddressFilterMatch(t *testing.T) {
 
 func TestPrintLog_WrongTopicCount(t *testing.T) {
 	store := memory.New()
-	w := newTestWatcher(Config{Token: tokens[0]}, store)
+	w := newTestWatcher(Config{Filter: FilterConfig{Token: tokens[0]}}, store)
 
 	l := types.Log{
 		BlockNumber: 1,
 		Topics:      []common.Hash{transferSig}, // missing from/to
 		Data:        make([]byte, 32),
 	}
-	w.printLog(context.Background(), l) // must not panic
+	w.processLog(context.Background(), l, testBlockTime) // must not panic
 
 	if store.Len() != 0 {
 		t.Errorf("expected no transfers stored for malformed log, got %d", store.Len())
@@ -195,13 +209,13 @@ func TestPrintLog_WrongTopicCount(t *testing.T) {
 
 func TestPrintLog_WrongTopic0(t *testing.T) {
 	store := memory.New()
-	w := newTestWatcher(Config{Token: tokens[0]}, store)
+	w := newTestWatcher(Config{Filter: FilterConfig{Token: tokens[0]}}, store)
 
 	raw := new(big.Int).Mul(big.NewInt(100), big.NewInt(1e6))
 	l := buildLog(1, common.Address{1}, common.Address{2}, raw)
 	l.Topics[0] = common.HexToHash("0xdeadbeef") // not a Transfer sig
 
-	w.printLog(context.Background(), l)
+	w.processLog(context.Background(), l, testBlockTime)
 
 	if store.Len() != 0 {
 		t.Errorf("expected no transfers stored for wrong topic, got %d", store.Len())
@@ -215,10 +229,10 @@ func TestPrintLog_StorageFields(t *testing.T) {
 	from := common.HexToAddress("0xAAAA000000000000000000000000000000000001")
 	to := common.HexToAddress("0xBBBB000000000000000000000000000000000002")
 
-	w := newTestWatcher(Config{Token: tokens[0]}, store)
+	w := newTestWatcher(Config{Filter: FilterConfig{Token: tokens[0]}}, store)
 
 	raw := new(big.Int).Mul(big.NewInt(500), big.NewInt(1e6))
-	w.printLog(context.Background(), buildLog(42, from, to, raw))
+	w.processLog(context.Background(), buildLog(42, from, to, raw), testBlockTime)
 
 	if store.Len() != 1 {
 		t.Fatalf("expected 1 transfer, got %d", store.Len())
@@ -239,9 +253,8 @@ func TestPrintLog_StorageFields(t *testing.T) {
 	if got.Token != "USDC" {
 		t.Errorf("Token: got %s, want USDC", got.Token)
 	}
-	wantTime := time.Unix(mockBlockTime, 0).UTC()
-	if !got.Timestamp.Equal(wantTime) {
-		t.Errorf("Timestamp: got %v, want %v", got.Timestamp, wantTime)
+	if !got.Timestamp.Equal(testBlockTime) {
+		t.Errorf("Timestamp: got %v, want %v", got.Timestamp, testBlockTime)
 	}
 }
 
@@ -249,24 +262,25 @@ func TestPrintLog_StorageFields(t *testing.T) {
 var _ storage.Storage = (*memory.Store)(nil)
 
 func BenchmarkPrintLog(b *testing.B) {
-      store := memory.New()
-      w := newTestWatcher(Config{
-          Token:     tokens[0], // USDC
-          MinAmount: 0,
-      }, store)
+	store := memory.New()
+	w := newTestWatcher(Config{
+		Filter: FilterConfig{
+			Token:     tokens[0], // USDC
+			MinAmount: 0,
+		},
+	}, store)
 
-      from := common.Address{1}
-      to := common.Address{2}
-      raw := new(big.Int).Mul(big.NewInt(5000), big.NewInt(1e6)) // 5000 USDC
+	from := common.Address{1}
+	to := common.Address{2}
+	raw := new(big.Int).Mul(big.NewInt(5000), big.NewInt(1e6)) // 5000 USDC
 
-      // Pre-build logs across N distinct blocks to exercise both cache hit and miss paths
-      logs := make([]types.Log, b.N)
-      for i := range logs {
-          logs[i] = buildLog(uint64(i%100), from, to, raw) // 100 unique blocks → cache saturates quickly
-      }
+	logs := make([]types.Log, b.N)
+	for i := range logs {
+		logs[i] = buildLog(uint64(i), from, to, raw)
+	}
 
-      b.ResetTimer()
-      for i := range logs {
-          w.printLog(context.Background(), logs[i])
-      }
-  }
+	b.ResetTimer()
+	for i := range logs {
+		w.processLog(context.Background(), logs[i], testBlockTime)
+	}
+}

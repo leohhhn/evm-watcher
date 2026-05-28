@@ -223,14 +223,16 @@ func promptConfig(ctx context.Context, client watcher.EthClient) (watcher.Config
 	}
 
 	cfg := watcher.Config{
-		Token:        token,
-		MinAmount:    minAmount,
-		MaxAmount:    maxAmount,
+		Filter: watcher.FilterConfig{
+			Token:     token,
+			MinAmount: minAmount,
+			MaxAmount: maxAmount,
+		},
 		OutputFormat: outputFmt,
 		OutputPath:   outputPath,
 	}
 	if filterByAddr {
-		cfg.FilterAddress = common.HexToAddress(filterAddr)
+		cfg.Filter.FilterAddress = common.HexToAddress(filterAddr)
 	}
 	return cfg, nil
 }

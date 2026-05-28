@@ -17,9 +17,10 @@ const (
 	FormatMarkdown                     // write to a Markdown table file
 )
 
-// transferRecord is the in-memory representation of a single Transfer event passed to output writers.
+// transferRecord is the canonical in-process representation of a matched Transfer event.
 type transferRecord struct {
 	Block     uint64
+	LogIndex  uint
 	Timestamp time.Time
 	TxHash    string
 	From      string
