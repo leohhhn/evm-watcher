@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"context"
 	"math/big"
 	"testing"
 
@@ -71,7 +72,7 @@ func TestPrintLog_BelowMinAmount(t *testing.T) {
 
 	// 500 USDC = 500_000_000 raw
 	raw := new(big.Int).Mul(big.NewInt(500), big.NewInt(1e6))
-	w.printLog(buildLog(1, common.Address{1}, common.Address{2}, raw))
+	w.printLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw))
 
 	if store.Len() != 0 {
 		t.Errorf("expected no transfers stored, got %d", store.Len())
@@ -87,7 +88,7 @@ func TestPrintLog_AboveMinAmount(t *testing.T) {
 
 	// 2000 USDC
 	raw := new(big.Int).Mul(big.NewInt(2000), big.NewInt(1e6))
-	w.printLog(buildLog(1, common.Address{1}, common.Address{2}, raw))
+	w.printLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw))
 
 	if store.Len() != 1 {
 		t.Errorf("expected 1 transfer stored, got %d", store.Len())
@@ -104,7 +105,7 @@ func TestPrintLog_AboveMaxAmount(t *testing.T) {
 
 	// 1000 USDC — above max
 	raw := new(big.Int).Mul(big.NewInt(1000), big.NewInt(1e6))
-	w.printLog(buildLog(1, common.Address{1}, common.Address{2}, raw))
+	w.printLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw))
 
 	if store.Len() != 0 {
 		t.Errorf("expected no transfers stored, got %d", store.Len())
@@ -120,7 +121,7 @@ func TestPrintLog_MaxAmountZeroMeansNoLimit(t *testing.T) {
 	}, store)
 
 	raw := new(big.Int).Mul(big.NewInt(999_999_999), big.NewInt(1e6))
-	w.printLog(buildLog(1, common.Address{1}, common.Address{2}, raw))
+	w.printLog(context.Background(), buildLog(1, common.Address{1}, common.Address{2}, raw))
 
 	if store.Len() != 1 {
 		t.Errorf("expected 1 transfer stored, got %d", store.Len())
@@ -142,11 +143,11 @@ func TestPrintLog_AddressFilterMatch(t *testing.T) {
 	raw := new(big.Int).Mul(big.NewInt(100), big.NewInt(1e6))
 
 	// target is sender — should pass
-	w.printLog(buildLog(1, target, other, raw))
+	w.printLog(context.Background(), buildLog(1, target, other, raw))
 	// target is recipient — should pass
-	w.printLog(buildLog(2, other, target, raw))
+	w.printLog(context.Background(), buildLog(2, other, target, raw))
 	// target not involved — should be filtered
-	w.printLog(buildLog(3, other, common.Address{9}, raw))
+	w.printLog(context.Background(), buildLog(3, other, common.Address{9}, raw))
 
 	if store.Len() != 2 {
 		t.Errorf("expected 2 transfers stored, got %d", store.Len())
@@ -164,7 +165,7 @@ func TestPrintLog_WrongTopicCount(t *testing.T) {
 		Topics:      []common.Hash{transferSig}, // missing from/to
 		Data:        make([]byte, 32),
 	}
-	w.printLog(l) // must not panic
+	w.printLog(context.Background(), l) // must not panic
 
 	if store.Len() != 0 {
 		t.Errorf("expected no transfers stored for malformed log, got %d", store.Len())
@@ -179,7 +180,7 @@ func TestPrintLog_WrongTopic0(t *testing.T) {
 	l := buildLog(1, common.Address{1}, common.Address{2}, raw)
 	l.Topics[0] = common.HexToHash("0xdeadbeef") // not a Transfer sig
 
-	w.printLog(l)
+	w.printLog(context.Background(), l)
 
 	if store.Len() != 0 {
 		t.Errorf("expected no transfers stored for wrong topic, got %d", store.Len())
@@ -196,7 +197,7 @@ func TestPrintLog_StorageFields(t *testing.T) {
 	w := newTestWatcher(Config{Token: Tokens[0]}, store)
 
 	raw := new(big.Int).Mul(big.NewInt(500), big.NewInt(1e6))
-	w.printLog(buildLog(42, from, to, raw))
+	w.printLog(context.Background(), buildLog(42, from, to, raw))
 
 	if store.Len() != 1 {
 		t.Fatalf("expected 1 transfer, got %d", store.Len())

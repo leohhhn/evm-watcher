@@ -98,7 +98,14 @@ func New(client EthClient, cfg Config) (*Watcher, error) {
 }
 
 func (w *Watcher) Close() {
-	w.writer.close()
+	if err := w.writer.close(); err != nil {
+		log.Printf("closing output writer: %v", err)
+	}
+	if store := w.cfg.Store; store != nil {
+		if err := store.Close(); err != nil {
+			log.Printf("closing storage: %v", err)
+		}
+	}
 	w.client.Close()
 }
 
@@ -136,12 +143,12 @@ func (w *Watcher) Start(ctx context.Context) error {
 		case err := <-sub.Err():
 			return fmt.Errorf("subscription error: %w", err)
 		case l := <-logs:
-			w.printLog(l)
+			w.printLog(ctx, l)
 		}
 	}
 }
 
-func (w *Watcher) printLog(l types.Log) {
+func (w *Watcher) printLog(ctx context.Context, l types.Log) {
 	if len(l.Topics) != 3 || l.Topics[0] != transferSig {
 		return
 	}
@@ -186,7 +193,7 @@ func (w *Watcher) printLog(l types.Log) {
 			To:       rec.To,
 			Amount:   rec.Amount,
 		}
-		if err := store.SaveTransfer(context.Background(), t); err != nil {
+		if err := store.SaveTransfer(ctx, t); err != nil {
 			log.Printf("storage error: %v", err)
 		}
 	}
